@@ -1,0 +1,7 @@
+# generate.py and serving (python -m http.server) work with the Python standard library only.
+# No external libraries are used. When adding one, pin it as "name==version".
+#
+# To recreate the environment (if the pyenv definitions are outdated and the pinned version is missing, run git -C "$(pyenv root)" pull first):
+#   pyenv install -s "$(cat .python-version)"
+#   "$(pyenv root)/versions/$(cat .python-version)/bin/python" -m venv .venv
+#   .venv/bin/python -m pip install -r requirements.txt

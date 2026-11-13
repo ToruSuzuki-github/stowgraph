@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "repo-graph.schema.json",
+  "title": "Per-repository Docker relationship data",
+  "description": "One file per repository. Place it in the repos/ folder and index.html merges it into the graph. Images and containers are identified by Docker ID; if the same ID appears in multiple files, they are merged into a single node.",
+  "type": "object",
+  "required": ["schemaVersion", "repository", "images", "containers"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": {
+      "const": 1,
+      "description": "Version of this structure. Increment it on an incompatible change."
+    },
+    "repository": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Display name of the repository. Must be unique across files (key for the legend and color coding)."
+        },
+        "path": {
+          "type": "string",
+          "description": "Location of the repository (informational)."
+        },
+        "color": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "description": "Optional. If omitted, index.html assigns one automatically from the default palette."
+        }
+      }
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this file was generated. Shown in the legend."
+    },
+    "images": {
+      "type": "array",
+      "description": "Images used by this repository. Includes the bases (ancestors) of derived images.",
+      "items": { "$ref": "#/$defs/image" }
+    },
+    "containers": {
+      "type": "array",
+      "description": "Containers of this repository (including stopped ones).",
+      "items": { "$ref": "#/$defs/container" }
+    }
+  },
+  "$defs": {
+    "dockerId": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "image": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/dockerId",
+          "description": "Image ID (IMAGE ID from docker images --no-trunc). The node identifier."
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of repository:tag names. An empty array for an unnamed image."
+        },
+        "role": {
+          "enum": ["base", "derived", "runtime"],
+          "description": "base = serves as the base of derived images, derived = built from another image, runtime = only started directly, not used as a base. If omitted, it is inferred from parent and whether children exist."
+        },
+        "parent": {
+          "anyOf": [{ "$ref": "#/$defs/dockerId" }, { "type": "null" }],
+          "description": "ID of the image used as the base. Source of the \"derive\" edge."
+        },
+        "layers": { "type": "integer", "minimum": 0 },
+        "size": { "type": "integer", "minimum": 0, "description": "Bytes (apparent size, including shared layers)." },
+        "created": { "type": "string", "format": "date-time" }
+      }
+    },
+    "container": {
+      "type": "object",
+      "required": ["id", "name", "image"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Container ID (64 hex digits). The node identifier."
+        },
+        "name": { "type": "string" },
+        "image": {
+          "$ref": "#/$defs/dockerId",
+          "description": "ID of the image the container was started from. Source of the \"run\" edge."
+        },
+        "state": {
+          "enum": ["created", "running", "paused", "restarting", "removing", "exited", "dead"]
+        },
+        "created": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

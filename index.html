@@ -1,0 +1,1067 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Content Security Policy: this page loads nothing from other sites. It only reads repos/ on the same origin.
+     'unsafe-inline' is needed because the script and styles are written inline in this single file -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<title>Stowgraph — Docker image and container relationship graph</title>
+<meta name="description" content="Shows how Docker images and containers relate as a graph, built from per-repository JSON files">
+<style>
+  :root {
+    --bg: #faf9f5;
+    --surface: #ffffff;
+    --surface-2: #f0eee6;
+    --text: #141413;
+    --muted: #5e5d59;
+    --border: #e3e0d6;
+    --edge: #b0aea5;
+    --focus: #1d63ed;
+    --accent-soft: #e5f2fc;
+    --clay: #d97757;
+    --chrome: #00153c;
+    --chrome-text: #faf9f5;
+    --running: #1f9d63;
+    --warn-bg: #fbeee8;
+    --warn-text: #8a3b1e;
+    --grid: #e8e6dc;
+    --tint: 13%;
+    --shadow: 0 1px 2px rgb(20 20 19 / 0.06);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1f1e1d;
+      --surface: #262624;
+      --surface-2: #30302e;
+      --text: #faf9f5;
+      --muted: #b0aea5;
+      --border: #3e3d39;
+      --edge: #77756d;
+      --focus: #5b8cff;
+      --accent-soft: #1b2a4a;
+      --clay: #e08a6c;
+      --chrome: #0b1630;
+      --chrome-text: #faf9f5;
+      --running: #4fd08e;
+      --warn-bg: #3a2419;
+      --warn-text: #f0b49a;
+      --grid: #34332f;
+      --tint: 24%;
+      --shadow: none;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1f1e1d;
+    --surface: #262624;
+    --surface-2: #30302e;
+    --text: #faf9f5;
+    --muted: #b0aea5;
+    --border: #3e3d39;
+    --edge: #77756d;
+    --focus: #5b8cff;
+    --accent-soft: #1b2a4a;
+    --clay: #e08a6c;
+    --chrome: #0b1630;
+    --chrome-text: #faf9f5;
+    --running: #4fd08e;
+    --warn-bg: #3a2419;
+    --warn-text: #f0b49a;
+    --grid: #34332f;
+    --tint: 24%;
+    --shadow: none;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.55 Inter, system-ui, "Segoe UI", "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif;
+    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+  }
+  h1, h2.serif, .detail-title, .empty h2 { font-family: inherit; font-variant-numeric: lining-nums; }
+  code, .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, "SFMono-Regular", monospace; font-size: 12px; }
+  button, .button {
+    font: inherit;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:hover, .button:hover { background: var(--surface-2); }
+  button:focus-visible, .button:focus-within, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+    padding: 10px 16px;
+    background: var(--chrome);
+    color: var(--chrome-text);
+    border-bottom: 2px solid var(--clay);
+  }
+  header h1 { font-size: 18px; font-weight: 500; margin: 0; letter-spacing: 0.01em; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand svg { display: block; }
+  .tagline { color: color-mix(in srgb, var(--chrome-text) 70%, transparent); font-size: 13px; }
+  @media (max-width: 760px) { .tagline { display: none; } }
+  #status { color: color-mix(in srgb, var(--chrome-text) 70%, transparent); font-size: 13px; flex: 1 1 200px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; }
+  .button input { display: none; }
+  header .button, header button { color: var(--chrome-text); background: transparent; border-color: color-mix(in srgb, var(--chrome-text) 35%, transparent); }
+  header .button:hover, header button:hover { background: color-mix(in srgb, var(--chrome-text) 12%, transparent); }
+  header .button.primary { background: #1d63ed; border-color: #1d63ed; color: #fff; }
+  header .button.primary:hover { background: #0d4df2; border-color: #0d4df2; }
+  header .button:focus-within, header button:focus-visible { outline-color: #fff; }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr) 300px;
+    grid-template-areas: "side graph detail";
+    flex: 1;
+  }
+  footer { padding: 8px 16px; border-top: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 12px; text-align: center; }
+  footer a { color: inherit; }
+  aside.side { grid-area: side; border-right: 1px solid var(--border); padding: 16px; background: var(--surface); }
+  main { grid-area: graph; position: relative; min-width: 0; display: flex; flex-direction: column; }
+  aside.detail { grid-area: detail; border-left: 1px solid var(--border); padding: 16px; background: var(--surface); overflow-wrap: anywhere; }
+
+  h2 { font-size: 12px; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  h2::before { content: ""; width: 3px; height: 12px; border-radius: 2px; background: var(--clay); flex: none; }
+  section + section { margin-top: 20px; }
+
+  .repo { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: start; padding: 8px; border-radius: 6px; cursor: pointer; }
+  .repo:hover { background: var(--surface-2); }
+  .repo input { margin: 3px 0 0; accent-color: var(--repo); }
+  .repo .name { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+  .repo .swatch { width: 12px; height: 12px; border-radius: 3px; background: var(--repo); flex: none; }
+  .repo .meta { grid-column: 2; color: var(--muted); font-size: 12px; }
+  .repo.off .name, .repo.off .meta { opacity: 0.45; }
+
+  .key { display: grid; grid-template-columns: 56px 1fr; gap: 6px 10px; align-items: center; font-size: 13px; }
+  .key svg { display: block; }
+
+  .roles { display: block; font-size: 13px; }
+  .roles dt { color: var(--text); font-weight: 600; }
+  .roles dd { color: var(--muted); font-size: 12px; margin: 2px 0 10px; }
+  .roles-note { color: var(--muted); font-size: 12px; margin: 0; }
+  .role-desc { color: var(--muted); font-size: 12px; margin: -8px 0 12px; }
+
+  .warnings { background: var(--warn-bg); color: var(--warn-text); border-radius: 6px; padding: 8px 10px; font-size: 12px; }
+  .warnings ul { margin: 0; padding-left: 18px; }
+
+  .toolbar { display: flex; align-items: center; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .toolbar[hidden] { display: none; }
+  .toolbar button { padding: 2px 10px; border-radius: 999px; }
+  .toolbar span { color: var(--muted); font-size: 12px; min-width: 44px; text-align: center; }
+  .graph-wrap {
+    flex: 1; overflow: auto; position: relative;
+    background-color: var(--bg);
+    background-image: radial-gradient(var(--grid) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+  #graph { display: block; }
+  #graph text { fill: var(--text); font-family: Inter, system-ui, "Segoe UI", "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif; }
+  #graph .col-title { fill: var(--muted); font-size: 12px; font-weight: 600; }
+  #graph .node { cursor: pointer; }
+  #graph .node:focus { outline: none; }
+  #graph .node:focus-visible .shape { stroke: var(--focus); stroke-width: 2; }
+  #graph .node .sub { fill: var(--muted); font-size: 12px; }
+  #graph .node.selected .shape { stroke: var(--clay); stroke-width: 2.5; }
+  #graph .dim { opacity: 0.18; }
+  #graph .edge, #graph .node { transition: opacity 120ms; }
+
+  .empty { max-width: 560px; margin: 48px auto; padding: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
+  .empty[hidden] { display: none; }
+  .empty h2 { font-size: 18px; font-weight: 500; letter-spacing: 0; color: var(--text); margin-bottom: 12px; }
+  .empty h2::before { display: none; }
+  .empty ol { padding-left: 20px; }
+  .empty li + li { margin-top: 8px; }
+  pre { background: #141413; color: #faf9f5; border-radius: 8px; padding: 8px 12px; overflow-x: auto; margin: 6px 0 0; }
+  .empty code { color: var(--focus); }
+  pre code { color: inherit; }
+
+  dl { display: grid; grid-template-columns: 92px 1fr; gap: 6px 10px; margin: 0; font-size: 13px; }
+  dt { color: var(--muted); }
+  dd { margin: 0; min-width: 0; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; margin: 0 6px 4px 0; }
+  .chip i { width: 10px; height: 10px; border-radius: 2px; background: var(--repo); display: inline-block; }
+  .link { background: none; border: none; padding: 0; color: var(--focus); text-decoration: underline; cursor: pointer; text-align: left; font: inherit; overflow-wrap: anywhere; }
+  .detail-title { font-size: 17px; font-weight: 500; margin: 0 0 6px; overflow-wrap: anywhere; }
+  .detail-kind { display: inline-block; color: var(--focus); background: var(--accent-soft); border-radius: 999px; padding: 1px 10px; font-size: 12px; font-weight: 600; margin-bottom: 12px; }
+  .repo .meta { font-variant-numeric: tabular-nums; }
+  .hint { color: var(--muted); font-size: 13px; }
+
+  @media (max-width: 1100px) {
+    .layout { grid-template-columns: 240px minmax(0, 1fr); grid-template-areas: "side graph" "detail detail"; }
+    aside.detail { border-left: none; border-top: 1px solid var(--border); }
+  }
+  @media (max-width: 760px) {
+    .layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "side" "graph" "detail"; }
+    aside.side { border-right: none; border-bottom: 1px solid var(--border); }
+    .graph-wrap { max-height: 70vh; min-height: 320px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true">
+      <rect x="2" y="14" width="9" height="9" rx="2" fill="#1d63ed"/>
+      <rect x="13" y="14" width="9" height="9" rx="2" fill="#2496ed"/>
+      <rect x="2" y="3" width="9" height="9" rx="2" fill="#5fb4f5"/>
+      <rect x="13" y="3" width="9" height="9" rx="4.5" fill="#d97757"/>
+    </svg>
+    <h1>Stowgraph</h1>
+    <span class="tagline" data-i18n="tagline">Relationship graph of Docker images and containers</span>
+  </div>
+  <div id="status"></div>
+  <div class="controls">
+    <label class="button primary" data-i18n-title="pickTitle" title="Choose the repos folder (or its parent)">
+      <span data-i18n="pick">Choose folder</span>
+      <input id="pick" type="file" webkitdirectory multiple>
+    </label>
+    <label class="button" data-i18n-title="pickFilesTitle" title="Choose one or more JSON files">
+      <span data-i18n="pickFiles">Choose files</span>
+      <input id="pick-files" type="file" accept=".json,application/json" multiple>
+    </label>
+    <button id="reload" type="button" hidden data-i18n="reload">Reload</button>
+    <button id="lang" type="button" lang="ja">日本語</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="side">
+    <section>
+      <h2 data-i18n="repos">Repositories</h2>
+      <div id="repos" class="hint"></div>
+    </section>
+    <section>
+      <h2 data-i18n="howto">How to read</h2>
+      <div class="key" id="key"></div>
+    </section>
+    <section>
+      <h2 data-i18n="roles">Image roles</h2>
+      <dl class="roles" id="roles"></dl>
+      <p class="roles-note" data-i18n="rolesNote"></p>
+    </section>
+    <section id="warn-section" hidden>
+      <h2 data-i18n="warnTitle">Notices</h2>
+      <div class="warnings"><ul id="warnings"></ul></div>
+    </section>
+  </aside>
+
+  <main>
+    <div class="toolbar" id="toolbar" hidden>
+      <button type="button" id="zoom-out" data-i18n-aria="zoomOut" aria-label="Zoom out">−</button>
+      <span id="zoom-label">100%</span>
+      <button type="button" id="zoom-in" data-i18n-aria="zoomIn" aria-label="Zoom in">＋</button>
+      <button type="button" id="zoom-reset" data-i18n="zoomReset">Actual size</button>
+    </div>
+    <div class="graph-wrap" id="wrap">
+      <div class="empty" id="empty"></div>
+      <svg id="graph" hidden role="img" data-i18n-aria="graphAria" aria-label="Relationship graph of Docker images and containers"></svg>
+    </div>
+  </main>
+
+  <aside class="detail" id="detail"></aside>
+</div>
+
+<footer>&copy; 2026 ToruSuzuki-github · <a href="LICENSE">Apache-2.0</a></footer>
+
+
+<script>
+"use strict";
+
+// ---- Constants --------------------------------------------------------
+const SCHEMA_VERSION = 1;
+// Docker-like blues alternate with Anthropic-like warm colors so adjacent repositories are easy to tell apart
+const PALETTE = ["#1d63ed", "#d97757", "#0b9cc4", "#6f8f4e", "#7d62c9", "#b8862b", "#b0517f", "#6a9bcc"];
+const NODE_W = 240, NODE_H = 56, PITCH_Y = 72, GROUP_GAP = 28, COL_GAP = 96, PAD = 24, HEAD_H = 32;
+const SVG_NS = "http://www.w3.org/2000/svg";
+const ROLES = ["base", "derived", "runtime"];
+
+// ---- Display language (English / Japanese) ----------------------------
+// All on-screen text lives here. Text that takes arguments is a function. Keep the en and ja keys identical
+const pl = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const I18N = {
+  en: {
+    title: "Stowgraph — Docker image and container relationship graph",
+    metaDesc: "Shows how Docker images and containers relate as a graph, built from per-repository JSON files",
+    tagline: "Relationship graph of Docker images and containers",
+    pick: "Choose folder",
+    pickTitle: "Choose the repos folder (or its parent)",
+    pickFiles: "Choose files",
+    pickFilesTitle: "Choose one or more JSON files",
+    reload: "Reload",
+    langButton: "日本語",
+    langTitle: "Switch to Japanese",
+    repos: "Repositories",
+    reposNone: "Nothing loaded",
+    howto: "How to read",
+    roles: "Image roles",
+    rolesNote: "A role is decided by connections within the graph. If you build a derived image from a runtime image, that image becomes a base image.",
+    warnTitle: "Notices",
+    zoomOut: "Zoom out",
+    zoomIn: "Zoom in",
+    zoomReset: "Actual size",
+    graphAria: "Relationship graph of Docker images and containers",
+    detailTitle: "Details",
+    detailHint: "Select a node to see its ID and connections.",
+    guide: {
+      title: "Load JSON files",
+      steps: [
+        { text: ["Create a JSON file for each repository and put it in the ", { code: "repos/" }, " folder."], cmd: ".venv/bin/python generate.py ../my-app" },
+        { text: ["Select ", { code: "repos/" }, " with \"Choose folder\" above, or pick the JSON files with \"Choose files\"."] },
+        { text: ["Serve this folder over HTTP and open it, and ", { code: "repos/" }, " is loaded automatically."], cmd: ".venv/bin/python -m http.server 8765 --bind 127.0.0.1" },
+      ],
+    },
+    emptyFilteredTitle: "No nodes to show",
+    emptyFilteredHint: "Turn on a repository in the list.",
+    srcServer: "repos/ (HTTP)",
+    srcPicked: "the chosen folder",
+    srcPickedFiles: "the chosen files",
+    statusInitial: "Load JSON files to show the graph.",
+    statusNoData: "No repository data could be loaded.",
+    statusLoaded: (src, r, i, c) => `Loaded ${pl(r, "repository", "repositories")} from ${src} (${pl(i, "image", "images")} · ${pl(c, "container", "containers")})`,
+    statusError: (msg) => `Auto-load failed: ${msg}. Please choose the folder or files.`,
+    errFetchRepos: (st) => `Could not fetch repos/ (HTTP ${st})`,
+    errRaw: (m) => m,
+    "warn.loadFail": (f) => `${f}: could not be read`,
+    "warn.badJson": (f, m) => `${f}: not valid JSON (${m})`,
+    "warn.schemaVersion": (f, v) => `${f}: schemaVersion ${v} is not supported`,
+    "warn.noRepoName": (f) => `${f}: repository.name is missing`,
+    "warn.notArrays": (f) => `${f}: images and containers must be arrays`,
+    "warn.dupName": (f, n) => `${f}: skipped because the repository name "${n}" is already used`,
+    "warn.imageId": (f, i) => `${f}: images[${i}].id is invalid`,
+    "warn.parentInvalid": (f, i) => `${f}: images[${i}].parent is invalid`,
+    "warn.parentConflict": (sid, f) => `The parent of ${sid} differs between files (${f})`,
+    "warn.containerInvalid": (f, i) => `${f}: the id or image of containers[${i}] is invalid`,
+    "warn.undefinedRef": (sid, fromId) => `${sid} is not defined in any JSON file (referenced by: ${label(nodeById(fromId))})`,
+    "warn.skipped": (names) => `Skipped because it is not repository data: ${names}`,
+    unknownImage: "Unknown image",
+    more: (n) => `+${n}`,
+    colFirst: "Starting images",
+    colDerivedN: (c) => `Derived images (level ${c})`,
+    colDerived: "Derived images",
+    colContainers: "Containers",
+    edgeRun: "Run",
+    edgeDerive: "Derive",
+    kindContainer: "Container",
+    kindImage: "Image",
+    stateUnknown: "Unknown state",
+    noDefinition: "No definition",
+    // Node sub-labels have to fit in a 240px-wide node, so English uses shorter forms here
+    subContainer: (state, sid) => `${state} · ${sid}`,
+    layersN: (n) => ` · ${pl(n, "layer", "layers")}`,
+    sharedN: (n) => ` · shared ×${n}`,
+    "roleShort.base": "Base",
+    "roleShort.derived": "Derived",
+    "roleShort.runtime": "Runtime",
+    "role.base": "Base image",
+    "role.derived": "Derived image",
+    "role.runtime": "Runtime image",
+    // Roles are decided the same way as role() in generate.py and the inference in ingest()
+    "roleDesc.base": "An image that other images are built on. Often pulled from Docker Hub or similar.",
+    "roleDesc.derived": "An image made by adding layers to a base image, such as the vsc- images built by a DevContainer build.",
+    "roleDesc.runtime": "An image that is neither a base nor derived and is used as-is to start containers, such as containerlab routers and hosts.",
+    "state.running": "Running",
+    "state.exited": "Exited",
+    "state.created": "Created",
+    "state.paused": "Paused",
+    "state.restarting": "Restarting",
+    "state.removing": "Removing",
+    "state.dead": "Dead",
+    keyImage: "Image",
+    keyRunning: "Container (running)",
+    keyStopped: "Container (stopped)",
+    keyDerive: "Derive (base → derived)",
+    keyRun: "Run (image → container)",
+    keyShared: "Striped color band: shared by several repositories",
+    repoMeta: (i, c) => `${pl(i, "image", "images")} · ${pl(c, "container", "containers")}`,
+    repoGenerated: (d) => `Generated ${d}`,
+    repoShow: (n) => `Show ${n}`,
+    dRepo: "Repository",
+    dTags: "Tags",
+    dId: "ID",
+    dState: "State",
+    dUndefined: "This ID is not defined in any JSON file",
+    dLayers: "Layers",
+    dSize: "Size",
+    dSizeNote: "Apparent value, including shared layers",
+    dCreated: "Created",
+    dBase: "Base",
+    dDerived: "Derived",
+    dContainers: "Containers",
+    dFrom: "Started from",
+    kindUndefined: "Image (no definition)",
+  },
+  ja: {
+    title: "Stowgraph — Docker イメージとコンテナの関係図",
+    metaDesc: "リポジトリごとの JSON から、Docker イメージとコンテナの関係をグラフで表示する",
+    tagline: "Docker イメージとコンテナの関係図",
+    pick: "フォルダを選択",
+    pickTitle: "repos フォルダ（またはその親）を選ぶ",
+    pickFiles: "ファイルを選択",
+    pickFilesTitle: "JSON ファイルを 1 つ以上選ぶ",
+    reload: "再読込",
+    langButton: "English",
+    langTitle: "英語に切り替える",
+    repos: "リポジトリ",
+    reposNone: "未読み込み",
+    howto: "読み方",
+    roles: "イメージの役割",
+    rolesNote: "役割は関係図の中のつながりで決まります。実行用イメージから派生イメージを作ると、そのイメージはベースイメージに変わります。",
+    warnTitle: "注意",
+    zoomOut: "縮小",
+    zoomIn: "拡大",
+    zoomReset: "等倍",
+    graphAria: "Docker イメージとコンテナの関係図",
+    detailTitle: "詳細",
+    detailHint: "ノードを選ぶと、ID やつながりを表示します。",
+    guide: {
+      title: "JSON を読み込んでください",
+      steps: [
+        { text: ["リポジトリごとに JSON を作り、", { code: "repos/" }, " フォルダに置きます。"], cmd: ".venv/bin/python generate.py ../my-app" },
+        { text: ["上の「フォルダを選択」で ", { code: "repos/" }, " を選ぶか、「ファイルを選択」で JSON を選びます。"] },
+        { text: ["このフォルダを HTTP で配信して開くと、", { code: "repos/" }, " を自動で読み込みます。"], cmd: ".venv/bin/python -m http.server 8765 --bind 127.0.0.1" },
+      ],
+    },
+    emptyFilteredTitle: "表示するノードがありません",
+    emptyFilteredHint: "左のリポジトリの表示を切り替えてください。",
+    srcServer: "repos/（HTTP）",
+    srcPicked: "選択したフォルダ",
+    srcPickedFiles: "選択したファイル",
+    statusInitial: "JSON を読み込むとグラフを表示します。",
+    statusNoData: "読み込めるリポジトリデータがありませんでした。",
+    statusLoaded: (src, r, i, c) => `${src} から ${r} リポジトリを読み込みました（イメージ ${i} · コンテナ ${c}）`,
+    statusError: (msg) => `自動読み込みに失敗しました: ${msg}。フォルダまたはファイルを選択してください。`,
+    errFetchRepos: (st) => `repos/ を取得できません（HTTP ${st}）`,
+    errRaw: (m) => m,
+    "warn.loadFail": (f) => `${f}: 読み込めませんでした`,
+    "warn.badJson": (f, m) => `${f}: JSON として読めません（${m}）`,
+    "warn.schemaVersion": (f, v) => `${f}: schemaVersion ${v} には対応していません`,
+    "warn.noRepoName": (f) => `${f}: repository.name がありません`,
+    "warn.notArrays": (f) => `${f}: images と containers は配列にしてください`,
+    "warn.dupName": (f, n) => `${f}: リポジトリ名「${n}」が重複しているため読み飛ばしました`,
+    "warn.imageId": (f, i) => `${f}: images[${i}].id が不正です`,
+    "warn.parentInvalid": (f, i) => `${f}: images[${i}].parent が不正です`,
+    "warn.parentConflict": (sid, f) => `${sid} の親がファイル間で食い違っています（${f}）`,
+    "warn.containerInvalid": (f, i) => `${f}: containers[${i}] の id か image が不正です`,
+    "warn.undefinedRef": (sid, fromId) => `${sid} はどの JSON にも定義がありません（参照元: ${label(nodeById(fromId))}）`,
+    "warn.skipped": (names) => `リポジトリデータではないため読み飛ばし: ${names}`,
+    unknownImage: "不明なイメージ",
+    more: (n) => `他${n}`,
+    colFirst: "起点のイメージ",
+    colDerivedN: (c) => `派生イメージ（${c} 段目）`,
+    colDerived: "派生イメージ",
+    colContainers: "コンテナ",
+    edgeRun: "起動",
+    edgeDerive: "派生",
+    kindContainer: "コンテナ",
+    kindImage: "イメージ",
+    stateUnknown: "状態不明",
+    noDefinition: "定義なし",
+    subContainer: (state, sid) => `コンテナ · ${state} · ${sid}`,
+    layersN: (n) => ` · ${n}層`,
+    sharedN: (n) => ` · 共有${n}`,
+    "roleShort.base": "ベースイメージ",
+    "roleShort.derived": "派生イメージ",
+    "roleShort.runtime": "実行用イメージ",
+    "role.base": "ベースイメージ",
+    "role.derived": "派生イメージ",
+    "role.runtime": "実行用イメージ",
+    "roleDesc.base": "ほかのイメージの土台になっているイメージ。Docker Hub などから取得したものが多い。",
+    "roleDesc.derived": "土台のイメージに層を足して作ったイメージ。DevContainer のビルドで作られる vsc- イメージなど。",
+    "roleDesc.runtime": "土台にも派生にもならず、そのままコンテナの起動に使うイメージ。containerlab のルータやホスト役など。",
+    "state.running": "実行中",
+    "state.exited": "停止",
+    "state.created": "作成済み",
+    "state.paused": "一時停止",
+    "state.restarting": "再起動中",
+    "state.removing": "削除中",
+    "state.dead": "異常終了",
+    keyImage: "イメージ",
+    keyRunning: "コンテナ（実行中）",
+    keyStopped: "コンテナ（停止中）",
+    keyDerive: "派生（土台 → 派生）",
+    keyRun: "起動（イメージ → コンテナ）",
+    keyShared: "縞の色帯は複数リポジトリで共有",
+    repoMeta: (i, c) => `イメージ ${i} · コンテナ ${c}`,
+    repoGenerated: (d) => `生成 ${d}`,
+    repoShow: (n) => `${n} を表示`,
+    dRepo: "リポジトリ",
+    dTags: "タグ",
+    dId: "ID",
+    dState: "状態",
+    dUndefined: "どの JSON にも定義がない ID です",
+    dLayers: "層",
+    dSize: "サイズ",
+    dSizeNote: "共有層も含めた見かけの値",
+    dCreated: "作成",
+    dBase: "土台",
+    dDerived: "派生",
+    dContainers: "コンテナ",
+    dFrom: "起動元",
+    kindUndefined: "イメージ（定義なし）",
+  },
+};
+
+function initialLang() {
+  try {
+    const saved = localStorage.getItem("stowgraph.lang");
+    if (saved === "en" || saved === "ja") return saved;
+  } catch (_) { /* if localStorage is unavailable, give up on saving the choice */ }
+  return (navigator.language || "").toLowerCase().startsWith("ja") ? "ja" : "en";
+}
+let lang = initialLang();
+function t(key, ...args) {
+  const v = I18N[lang][key];
+  return typeof v === "function" ? v(...args) : v;
+}
+const hasText = (key) => key in I18N[lang];
+// Turn an array of text parts (strings mixed with { code }) into DOM nodes
+const rich = (parts) => parts.map((p) => (typeof p === "string" ? p : h("code", {}, [p.code])));
+
+// ---- State ------------------------------------------------------------
+const model = { repos: [], images: new Map(), containers: new Map(), warnings: [], skipped: [] };
+const view = { hidden: new Set(), selected: null, zoom: 1, source: "", error: null };
+
+// ---- Loading ----------------------------------------------------------
+class LoadError extends Error {
+  constructor(key, ...args) { super(key); this.key = key; this.args = args; }
+}
+
+async function loadFromServer() {
+  let names = [];
+  try {
+    const r = await fetch("repos/index.json", { cache: "no-store" });
+    if (r.ok) names = await r.json();
+  } catch (_) { /* if there is no index file, fall back to the directory listing */ }
+  if (!Array.isArray(names) || names.length === 0) {
+    const r = await fetch("repos/", { cache: "no-store" });
+    if (!r.ok) throw new LoadError("errFetchRepos", r.status);
+    const html = await r.text();
+    names = [...html.matchAll(/href="([^"?#]+\.json)"/gi)].map((m) => decodeURIComponent(m[1]));
+  }
+  names = [...new Set(names)].filter((n) => !/(^|\/)index\.json$/.test(n));
+  const files = await Promise.all(names.map(async (n) => {
+    const r = await fetch(`repos/${encodeURI(n)}`, { cache: "no-store" });
+    return { name: n, text: r.ok ? await r.text() : null };
+  }));
+  ingest(files, "srcServer");
+}
+
+async function readFiles(fileList, sourceKey) {
+  const files = await Promise.all([...fileList]
+    .filter((f) => f.name.toLowerCase().endsWith(".json"))
+    .map(async (f) => ({ name: f.webkitRelativePath || f.name, text: await f.text() })));
+  ingest(files, sourceKey);
+}
+
+// ---- Validation and merging -------------------------------------------
+const isId = (v) => typeof v === "string" && /^sha256:[0-9a-f]{64}$/.test(v);
+const isCid = (v) => typeof v === "string" && /^[0-9a-f]{64}$/.test(v);
+
+function ingest(files, sourceKey) {
+  model.repos = []; model.images = new Map(); model.containers = new Map();
+  model.warnings = []; model.skipped = [];
+  const warn = (key, ...args) => model.warnings.push({ key, args });
+
+  const repoFiles = [];
+  for (const f of files) {
+    if (f.text === null) { warn("warn.loadFail", f.name); continue; }
+    let data;
+    try { data = JSON.parse(f.text); } catch (e) { warn("warn.badJson", f.name, e.message); continue; }
+    if (!data || typeof data !== "object" || !("schemaVersion" in data) || !("repository" in data)) {
+      model.skipped.push(f.name); continue;  // A file that is not repository data, such as the schema definition
+    }
+    if (data.schemaVersion !== SCHEMA_VERSION) { warn("warn.schemaVersion", f.name, data.schemaVersion); continue; }
+    const name = data.repository && data.repository.name;
+    if (typeof name !== "string" || name === "") { warn("warn.noRepoName", f.name); continue; }
+    if (!Array.isArray(data.images) || !Array.isArray(data.containers)) { warn("warn.notArrays", f.name); continue; }
+    if (repoFiles.some((r) => r.data.repository.name === name)) { warn("warn.dupName", f.name, name); continue; }
+    repoFiles.push({ file: f.name, data });
+  }
+  repoFiles.sort((a, b) => a.data.repository.name.localeCompare(b.data.repository.name, "ja"));
+
+  let auto = 0;
+  for (const { file, data } of repoFiles) {
+    const r = data.repository;
+    const color = typeof r.color === "string" && /^#[0-9a-fA-F]{6}$/.test(r.color) ? r.color : PALETTE[auto++ % PALETTE.length];
+    const repo = { name: r.name, path: r.path || "", color, file, generatedAt: data.generatedAt || "", images: 0, containers: 0 };
+    model.repos.push(repo);
+
+    data.images.forEach((im, i) => {
+      if (!im || !isId(im.id)) { warn("warn.imageId", file, i); return; }
+      const n = getImage(im.id);
+      n.placeholder = false;
+      n.repos.add(repo.name);
+      (Array.isArray(im.tags) ? im.tags : []).forEach((t) => n.tags.add(t));
+      if (im.parent != null) {
+        if (!isId(im.parent)) warn("warn.parentInvalid", file, i);
+        else if (n.parent && n.parent !== im.parent) warn("warn.parentConflict", shortId(im.id), file);
+        else n.parent = im.parent;
+      }
+      if (im.role && !n.role) n.role = im.role;
+      if (Number.isInteger(im.layers)) n.layers = im.layers;
+      if (Number.isInteger(im.size)) n.size = im.size;
+      if (im.created) n.created = im.created;
+      repo.images++;
+    });
+    data.containers.forEach((c, i) => {
+      if (!c || !isCid(c.id) || !isId(c.image)) { warn("warn.containerInvalid", file, i); return; }
+      const n = model.containers.get(c.id) || { kind: "container", id: c.id, repos: new Set() };
+      Object.assign(n, { name: c.name || shortId(c.id), image: c.image, state: c.state || "", created: c.created || "" });
+      n.repos.add(repo.name);
+      model.containers.set(c.id, n);
+      repo.containers++;
+    });
+  }
+
+  // An ID with no definition is filled in as an "unknown image"
+  const refs = [];
+  for (const n of model.images.values()) if (n.parent) refs.push([n.parent, n]);
+  for (const c of model.containers.values()) refs.push([c.image, c]);
+  for (const [id, from] of refs) {
+    if (!model.images.has(id) || model.images.get(id).placeholder) {
+      const p = getImage(id);
+      from.repos.forEach((r) => p.repos.add(r));
+      warn("warn.undefinedRef", shortId(id), from.id);
+    }
+  }
+  for (const n of model.images.values()) {
+    if (!n.role) n.role = n.parent ? "derived" : ([...model.images.values()].some((m) => m.parent === n.id) ? "base" : "runtime");
+  }
+
+  view.source = sourceKey;
+  view.error = null;
+  view.hidden = new Set([...view.hidden].filter((r) => model.repos.some((x) => x.name === r)));
+  if (view.selected && !nodeById(view.selected)) view.selected = null;
+  renderAll();
+}
+
+function getImage(id) {
+  if (!model.images.has(id)) model.images.set(id, { kind: "image", id, tags: new Set(), parent: null, role: "", repos: new Set(), placeholder: true });
+  return model.images.get(id);
+}
+const nodeById = (id) => model.images.get(id) || model.containers.get(id);
+const repoByName = (name) => model.repos.find((r) => r.name === name);
+const shortId = (id) => id.replace(/^sha256:/, "").slice(0, 12);
+
+const roleText = (role) => (hasText(`role.${role}`) ? t(`role.${role}`) : "");
+const roleShortText = (role) => (hasText(`roleShort.${role}`) ? t(`roleShort.${role}`) : "");
+const stateText = (state) => (hasText(`state.${state}`) ? t(`state.${state}`) : state || "");
+
+function label(n) {
+  if (n.kind === "container") return n.name;
+  if (n.placeholder) return t("unknownImage");
+  const tags = [...n.tags];
+  if (tags.length === 0) return "<none>";
+  const m = tags[0].match(/^(vsc-.+?)-[0-9a-f]{64}(-uid)?(?::latest)?$/);
+  const main = m ? `${m[1]}-…${m[2] || ""}` : tags[0].split("/").pop();
+  return tags.length > 1 ? `${main} ${t("more", tags.length - 1)}` : main;
+}
+
+// ---- Graph construction -----------------------------------------------
+function visibleRepos(n) { return [...n.repos].filter((r) => !view.hidden.has(r)).sort((a, b) => repoIndex(a) - repoIndex(b)); }
+function repoIndex(name) { return model.repos.findIndex((r) => r.name === name); }
+
+function buildGraph() {
+  const nodes = [...model.images.values(), ...model.containers.values()].filter((n) => visibleRepos(n).length > 0);
+  const vis = new Set(nodes.map((n) => n.id));
+  const pred = (n) => (n.kind === "image" ? n.parent : n.image);
+  const children = new Map(nodes.map((n) => [n.id, []]));
+  const edges = [];
+  for (const n of nodes) {
+    const p = pred(n);
+    if (p && vis.has(p)) { children.get(p).push(n.id); edges.push({ from: p, to: n.id, type: n.kind === "image" ? "derive" : "run" }); }
+  }
+
+  const depth = new Map();
+  const depthOf = (id, guard = 0) => {
+    if (depth.has(id)) return depth.get(id);
+    const n = nodeById(id);
+    const d = n.parent && vis.has(n.parent) && guard < 50 ? depthOf(n.parent, guard + 1) + 1 : 0;
+    depth.set(id, d);
+    return d;
+  };
+  const images = nodes.filter((n) => n.kind === "image");
+  images.forEach((n) => depthOf(n.id));
+  const maxDepth = images.length ? Math.max(...images.map((n) => depth.get(n.id))) : -1;
+  const hasContainers = nodes.some((n) => n.kind === "container");
+  const colOf = (n) => (n.kind === "image" ? depth.get(n.id) : maxDepth + 1);
+  const cols = maxDepth + 1 + (hasContainers ? 1 : 0);
+
+  const sortKey = (a, b) => {
+    const na = nodeById(a), nb = nodeById(b);
+    if (na.kind !== nb.kind) return na.kind === "image" ? -1 : 1;
+    const ra = repoIndex(visibleRepos(na)[0]), rb = repoIndex(visibleRepos(nb)[0]);
+    return ra - rb || label(na).localeCompare(label(nb), "ja");
+  };
+  children.forEach((list) => list.sort(sortKey));
+  const roots = nodes.filter((n) => !pred(n) || !vis.has(pred(n))).map((n) => n.id).sort(sortKey);
+
+  // Give each leaf its own row and place a parent at the middle of its children (it is a tree, so edges do not cross)
+  const pos = new Map();
+  let cursor = PAD + HEAD_H, lastGroup = null;
+  const visit = (id) => {
+    const n = nodeById(id);
+    const kids = children.get(id);
+    let y;
+    if (kids.length === 0) { y = cursor; cursor += PITCH_Y; }
+    else { const ys = kids.map(visit); y = (ys[0] + ys[ys.length - 1]) / 2; }
+    pos.set(id, { x: PAD + colOf(n) * (NODE_W + COL_GAP), y });
+    return y;
+  };
+  for (const r of roots) {
+    const g = visibleRepos(nodeById(r)).join("|");
+    if (lastGroup !== null && g !== lastGroup) cursor += GROUP_GAP;
+    lastGroup = g;
+    visit(r);
+  }
+
+  const titles = [];
+  for (let c = 0; c <= maxDepth; c++) titles.push(c === 0 ? t("colFirst") : maxDepth > 1 ? t("colDerivedN", c) : t("colDerived"));
+  if (hasContainers) titles.push(t("colContainers"));
+  return {
+    nodes, edges, pos, children, titles,
+    width: PAD * 2 + Math.max(cols, 1) * NODE_W + Math.max(cols - 1, 0) * COL_GAP,
+    height: cursor - PITCH_Y + NODE_H + PAD,
+  };
+}
+
+// ---- Rendering --------------------------------------------------------
+function el(tag, attrs = {}, kids = []) {
+  const e = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) if (v !== undefined && v !== null) e.setAttribute(k, v);
+  for (const k of kids) e.append(k);
+  return e;
+}
+const measureCtx = document.createElement("canvas").getContext("2d");
+function fit(text, maxW, font) {
+  measureCtx.font = font;
+  if (measureCtx.measureText(text).width <= maxW) return text;
+  let lo = 1, hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    const head = Math.ceil(mid * 0.6), tail = mid - head;
+    const t = text.slice(0, head) + "…" + (tail ? text.slice(-tail) : "");
+    if (measureCtx.measureText(t).width <= maxW) lo = mid; else hi = mid - 1;
+  }
+  const head = Math.ceil(lo * 0.6), tail = lo - head;
+  return text.slice(0, head) + "…" + (tail ? text.slice(-tail) : "");
+}
+const FONT = 'Inter, system-ui, "Segoe UI", "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif';
+
+let graph = null;
+
+function renderEmpty(box, filtered) {
+  if (filtered) {
+    box.replaceChildren(h("h2", {}, [t("emptyFilteredTitle")]), h("p", { class: "hint" }, [t("emptyFilteredHint")]));
+    return;
+  }
+  const g = t("guide");
+  box.replaceChildren(
+    h("h2", {}, [g.title]),
+    h("ol", {}, g.steps.map((st) => h("li", {}, [...rich(st.text), st.cmd ? h("pre", {}, [st.cmd]) : null]))),
+  );
+}
+
+function renderGraph() {
+  const svg = document.getElementById("graph");
+  svg.replaceChildren();
+  graph = buildGraph();
+  const empty = graph.nodes.length === 0;
+  svg.hidden = empty;
+  document.getElementById("toolbar").hidden = empty;
+  const emptyBox = document.getElementById("empty");
+  emptyBox.hidden = !empty;
+  if (empty) {
+    renderEmpty(emptyBox, model.repos.length > 0);
+    return;
+  }
+
+  svg.setAttribute("viewBox", `0 0 ${graph.width} ${graph.height}`);
+  applyZoom();
+
+  graph.titles.forEach((t, c) => {
+    svg.append(el("text", { class: "col-title", x: PAD + c * (NODE_W + COL_GAP) + 2, y: PAD + 12 }, [t]));
+  });
+
+  const edgeLayer = el("g");
+  const nodeLayer = el("g");
+  svg.append(edgeLayer, nodeLayer);
+
+  for (const e of graph.edges) {
+    const a = graph.pos.get(e.from), b = graph.pos.get(e.to);
+    const x1 = a.x + NODE_W, y1 = a.y + NODE_H / 2, x2 = b.x - 7, y2 = b.y + NODE_H / 2;
+    const dx = Math.max(40, (x2 - x1) / 2);
+    const target = visibleRepos(nodeById(e.to));
+    const color = target.length === 1 ? repoByName(target[0]).color : "var(--edge)";
+    const g = el("g", { class: "edge", "data-from": e.from, "data-to": e.to });
+    g.append(el("path", {
+      d: `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`,
+      fill: "none", stroke: color, "stroke-width": 2, "stroke-dasharray": e.type === "run" ? "6 4" : null,
+    }));
+    g.append(el("path", { d: `M${x2},${y2 - 5} L${x2 + 7},${y2} L${x2},${y2 + 5} Z`, fill: color }));
+    g.append(el("title", {}, [e.type === "run" ? t("edgeRun") : t("edgeDerive")]));
+    edgeLayer.append(g);
+  }
+
+  for (const n of graph.nodes) {
+    const p = graph.pos.get(n.id);
+    const repos = visibleRepos(n);
+    const single = repos.length === 1 ? repoByName(repos[0]).color : null;
+    const isC = n.kind === "container";
+    const g = el("g", {
+      class: "node" + (view.selected === n.id ? " selected" : ""),
+      transform: `translate(${p.x},${p.y})`, tabindex: 0, role: "button", "data-id": n.id,
+      "aria-label": `${isC ? t("kindContainer") : t("kindImage")} ${label(n)}`,
+    });
+    g.append(el("rect", {
+      class: "shape", width: NODE_W, height: NODE_H, rx: isC ? NODE_H / 2 : 7,
+      style: single ? `fill: color-mix(in srgb, ${single} var(--tint), var(--surface))` : "fill: var(--surface-2)",
+      stroke: "var(--border)", "stroke-width": 1,
+      "stroke-dasharray": (isC && n.state !== "running") || n.placeholder ? "5 3" : null,
+    }));
+    // Repository color band (a shared node gets stripes)
+    const barX = isC ? 14 : 6, barH = NODE_H - 16;
+    repos.forEach((r, i) => {
+      g.append(el("rect", { x: barX, y: 8 + (barH / repos.length) * i, width: 5, height: barH / repos.length, fill: repoByName(r).color }));
+    });
+    const tx = barX + 13, maxW = NODE_W - tx - (isC ? 22 : 10);
+    const main = label(n);
+    const sub = isC
+      ? t("subContainer", stateText(n.state) || t("stateUnknown"), shortId(n.id))
+      : n.placeholder ? `${t("noDefinition")} · ${shortId(n.id)}`
+      : `${roleShortText(n.role) || t("kindImage")}${n.layers != null ? t("layersN", n.layers) : ""}${repos.length > 1 ? t("sharedN", repos.length) : ""}`;
+    g.append(el("text", { x: tx, y: 24, "font-size": 13, "font-weight": 600 }, [fit(main, maxW, `600 13px ${FONT}`)]));
+    g.append(el("text", { class: "sub", x: tx, y: 42 }, [fit(sub, maxW, `12px ${FONT}`)]));
+    if (isC && n.state === "running") g.append(el("circle", { cx: NODE_W - 20, cy: NODE_H / 2, r: 4, fill: "var(--running)" }));
+    g.append(el("title", {}, [[...(n.kind === "image" ? n.tags : [n.name])].join("\n") || shortId(n.id)]));
+    nodeLayer.append(g);
+  }
+}
+
+function lineage(id) {
+  const set = new Set([id]);
+  let n = nodeById(id), guard = 0;
+  while (n && guard++ < 50) {
+    const p = n.kind === "image" ? n.parent : n.image;
+    if (!p) break;
+    set.add(p); n = nodeById(p);
+  }
+  const stack = [id];
+  while (stack.length) for (const c of graph.children.get(stack.pop()) || []) if (!set.has(c)) { set.add(c); stack.push(c); }
+  return set;
+}
+function highlight(id) {
+  const svg = document.getElementById("graph");
+  const set = id ? lineage(id) : null;
+  svg.querySelectorAll(".node").forEach((g) => g.classList.toggle("dim", !!set && !set.has(g.dataset.id)));
+  svg.querySelectorAll(".edge").forEach((g) => g.classList.toggle("dim", !!set && !(set.has(g.dataset.from) && set.has(g.dataset.to))));
+}
+
+function applyZoom() {
+  const svg = document.getElementById("graph");
+  if (!graph) return;
+  svg.setAttribute("width", Math.round(graph.width * view.zoom));
+  svg.setAttribute("height", Math.round(graph.height * view.zoom));
+  document.getElementById("zoom-label").textContent = `${Math.round(view.zoom * 100)}%`;
+}
+
+// ---- Side panels ------------------------------------------------------
+function fmtDate(s) {
+  const d = new Date(s);
+  if (!s || isNaN(d)) return "—";
+  return lang === "ja"
+    ? d.toLocaleString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+function fmtSize(b) {
+  if (b == null) return "—";
+  return b >= 1e9 ? `${(b / 1e9).toFixed(2)} GB` : b >= 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.round(b / 1e3)} KB`;
+}
+function h(tag, attrs = {}, kids = []) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "style") e.style.cssText = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v !== undefined && v !== null && v !== false) e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids) if (k !== null && k !== undefined) e.append(k);
+  return e;
+}
+
+function renderRepos() {
+  const box = document.getElementById("repos");
+  box.className = "";
+  if (model.repos.length === 0) { box.className = "hint"; box.textContent = t("reposNone"); return; }
+  box.replaceChildren(...model.repos.map((r) => {
+    const on = !view.hidden.has(r.name);
+    const input = h("input", { type: "checkbox", checked: on, "aria-label": t("repoShow", r.name),
+      onchange: () => { input.checked ? view.hidden.delete(r.name) : view.hidden.add(r.name); renderAll(); } });
+    return h("label", { class: "repo" + (on ? "" : " off"), style: `--repo: ${r.color}`, title: r.path || r.file }, [
+      input,
+      h("span", { class: "name" }, [h("span", { class: "swatch" }), r.name]),
+      h("span", { class: "meta" }, [t("repoMeta", r.images, r.containers), h("br"), t("repoGenerated", fmtDate(r.generatedAt))]),
+    ]);
+  }));
+}
+
+function renderKey() {
+  const sample = (kids) => el("svg", { width: 56, height: 24, viewBox: "0 0 56 24" }, kids);
+  const items = [
+    [sample([el("rect", { x: 1, y: 3, width: 54, height: 18, rx: 4, fill: "var(--surface-2)", stroke: "var(--border)" })]), t("keyImage")],
+    [sample([el("rect", { x: 1, y: 3, width: 54, height: 18, rx: 9, fill: "var(--surface-2)", stroke: "var(--border)" }), el("circle", { cx: 45, cy: 12, r: 3, fill: "var(--running)" })]), t("keyRunning")],
+    [sample([el("rect", { x: 1, y: 3, width: 54, height: 18, rx: 9, fill: "var(--surface-2)", stroke: "var(--border)", "stroke-dasharray": "5 3" })]), t("keyStopped")],
+    [sample([el("path", { d: "M2,12 H46", stroke: "var(--edge)", "stroke-width": 2 }), el("path", { d: "M46,7 L53,12 L46,17 Z", fill: "var(--edge)" })]), t("keyDerive")],
+    [sample([el("path", { d: "M2,12 H46", stroke: "var(--edge)", "stroke-width": 2, "stroke-dasharray": "6 4" }), el("path", { d: "M46,7 L53,12 L46,17 Z", fill: "var(--edge)" })]), t("keyRun")],
+    [sample([el("rect", { x: 20, y: 2, width: 6, height: 10, fill: PALETTE[0] }), el("rect", { x: 20, y: 12, width: 6, height: 10, fill: PALETTE[1] })]), t("keyShared")],
+  ];
+  document.getElementById("key").replaceChildren(...items.flatMap(([svg, text]) => [svg, h("span", {}, [text])]));
+  document.getElementById("roles").replaceChildren(...ROLES.flatMap((r) => [h("dt", {}, [t(`role.${r}`)]), h("dd", {}, [t(`roleDesc.${r}`)])]));
+}
+
+function renderWarnings() {
+  const list = model.warnings.map((w) => t(w.key, ...w.args));
+  if (model.skipped.length) list.push(t("warn.skipped", model.skipped.join(", ")));
+  document.getElementById("warn-section").hidden = list.length === 0;
+  document.getElementById("warnings").replaceChildren(...list.map((w) => h("li", {}, [w])));
+}
+
+function renderDetail() {
+  const box = document.getElementById("detail");
+  const n = view.selected && nodeById(view.selected);
+  if (!n) { box.replaceChildren(h("h2", {}, [t("detailTitle")]), h("p", { class: "hint" }, [t("detailHint")])); return; }
+  const go = (id) => h("button", { class: "link", type: "button", onclick: () => select(id) }, [label(nodeById(id))]);
+  const chips = [...n.repos].sort((a, b) => repoIndex(a) - repoIndex(b))
+    .map((r) => h("span", { class: "chip", style: `--repo: ${repoByName(r).color}` }, [h("i"), r]));
+  const rows = [];
+  const row = (k, ...v) => rows.push(h("dt", {}, [k]), h("dd", {}, v));
+  row(t("dRepo"), ...chips);
+  if (n.kind === "image") {
+    if (n.tags.size) row(t("dTags"), ...[...n.tags].flatMap((tag, i) => [i ? h("br") : null, h("span", { class: "mono" }, [tag])]));
+    row(t("dId"), h("span", { class: "mono" }, [n.id]));
+    if (n.placeholder) row(t("dState"), t("dUndefined"));
+    if (n.layers != null) row(t("dLayers"), `${n.layers}`);
+    if (n.size != null) row(t("dSize"), fmtSize(n.size), h("br"), h("span", { class: "hint" }, [t("dSizeNote")]));
+    if (n.created) row(t("dCreated"), fmtDate(n.created));
+    if (n.parent) row(t("dBase"), model.images.has(n.parent) ? go(n.parent) : h("span", { class: "mono" }, [n.parent]));
+    const kids = (graph && graph.children.get(n.id)) || [];
+    const derived = kids.filter((id) => nodeById(id).kind === "image");
+    const runs = kids.filter((id) => nodeById(id).kind === "container");
+    if (derived.length) row(t("dDerived"), ...derived.flatMap((id, i) => [i ? h("br") : null, go(id)]));
+    if (runs.length) row(t("dContainers"), ...runs.flatMap((id, i) => [i ? h("br") : null, go(id)]));
+  } else {
+    row(t("dState"), stateText(n.state) || "—");
+    row(t("dId"), h("span", { class: "mono" }, [n.id]));
+    row(t("dFrom"), go(n.image));
+    if (n.created) row(t("dCreated"), fmtDate(n.created));
+  }
+  box.replaceChildren(
+    h("h2", {}, [t("detailTitle")]),
+    h("p", { class: "detail-title" }, [n.kind === "image" ? label(n) : n.name]),
+    h("div", { class: "detail-kind" }, [n.kind === "image" ? (n.placeholder ? t("kindUndefined") : roleText(n.role) || t("kindImage")) : t("kindContainer")]),
+    n.kind === "image" && !n.placeholder && hasText(`roleDesc.${n.role}`) ? h("p", { class: "role-desc" }, [t(`roleDesc.${n.role}`)]) : null,
+    h("dl", {}, rows),
+  );
+}
+
+function renderStatus() {
+  const s = document.getElementById("status");
+  if (view.error) { s.textContent = t("statusError", t(view.error.key, ...view.error.args)); return; }
+  if (model.repos.length === 0) { s.textContent = t(model.warnings.length ? "statusNoData" : "statusInitial"); return; }
+  s.textContent = t("statusLoaded", t(view.source), model.repos.length, model.images.size, model.containers.size);
+}
+
+function renderAll() {
+  renderStatus(); renderRepos(); renderWarnings(); renderGraph(); renderDetail();
+  if (view.selected) highlight(view.selected);
+}
+
+function select(id) {
+  view.selected = id;
+  document.querySelectorAll("#graph .node").forEach((g) => g.classList.toggle("selected", g.dataset.id === id));
+  renderDetail();
+  highlight(id);
+  const g = id && document.querySelector(`#graph .node[data-id="${id}"]`);
+  if (g) g.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+}
+
+// ---- Events -----------------------------------------------------------
+const svg = document.getElementById("graph");
+svg.addEventListener("click", (e) => { const g = e.target.closest(".node"); select(g ? g.dataset.id : null); });
+svg.addEventListener("keydown", (e) => {
+  const g = e.target.closest(".node");
+  if (g && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); select(g.dataset.id); }
+  if (e.key === "Escape") select(null);
+});
+svg.addEventListener("pointerover", (e) => { const g = e.target.closest(".node"); if (g) highlight(g.dataset.id); });
+svg.addEventListener("pointerout", (e) => { if (e.target.closest(".node")) highlight(view.selected); });
+
+document.getElementById("pick").addEventListener("change", (e) => {
+  const files = e.target.files;
+  if (files.length) readFiles(files, "srcPicked");
+  e.target.value = "";
+});
+document.getElementById("pick-files").addEventListener("change", (e) => {
+  const files = e.target.files;
+  if (files.length) readFiles(files, "srcPickedFiles");
+  e.target.value = "";
+});
+document.getElementById("reload").addEventListener("click", () => loadFromServer().catch(showLoadError));
+document.getElementById("zoom-in").addEventListener("click", () => { view.zoom = Math.min(2, +(view.zoom + 0.1).toFixed(2)); applyZoom(); });
+document.getElementById("zoom-out").addEventListener("click", () => { view.zoom = Math.max(0.4, +(view.zoom - 0.1).toFixed(2)); applyZoom(); });
+document.getElementById("zoom-reset").addEventListener("click", () => { view.zoom = 1; applyZoom(); });
+
+// Dropping files is not supported. Cancel the drop so that the browser does not navigate away to the dropped file
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => e.preventDefault());
+
+function showLoadError(err) {
+  view.error = err instanceof LoadError ? { key: err.key, args: err.args } : { key: "errRaw", args: [err.message] };
+  renderStatus();
+}
+
+// Apply the display language. Static text uses the data-i18n attributes; dynamic parts are replaced by re-rendering
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.title = t("title");
+  document.querySelector('meta[name="description"]').setAttribute("content", t("metaDesc"));
+  document.querySelectorAll("[data-i18n]").forEach((e) => { e.textContent = t(e.dataset.i18n); });
+  document.querySelectorAll("[data-i18n-aria]").forEach((e) => e.setAttribute("aria-label", t(e.dataset.i18nAria)));
+  document.querySelectorAll("[data-i18n-title]").forEach((e) => e.setAttribute("title", t(e.dataset.i18nTitle)));
+  const b = document.getElementById("lang");
+  b.textContent = t("langButton");
+  b.title = t("langTitle");
+  b.lang = lang === "ja" ? "en" : "ja";
+  renderKey();
+  renderAll();
+}
+document.getElementById("lang").addEventListener("click", () => {
+  lang = lang === "ja" ? "en" : "ja";
+  try { localStorage.setItem("stowgraph.lang", lang); } catch (_) { /* the display still switches even if the choice cannot be saved */ }
+  applyLang();
+});
+
+applyLang();
+if (location.protocol === "http:" || location.protocol === "https:") {
+  document.getElementById("reload").hidden = false;
+  loadFromServer().catch(showLoadError);
+}
+</script>
+</body>
+</html>
